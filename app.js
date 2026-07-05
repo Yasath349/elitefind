@@ -26,6 +26,17 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// Compass bearing (0-360°, 0 = north) from point A to point B — used to point
+// the direction arrow straight at the other person, independent of roads.
+function bearingDeg(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const φ1 = toRad(lat1), φ2 = toRad(lat2);
+  const Δλ = toRad(lon2 - lon1);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
 function fmtDistance(m) {
   if (m == null || isNaN(m)) return '—';
   if (m < 1000) return `${Math.round(m)} m`;
@@ -387,14 +398,18 @@ const ConnectionWatcher = {
 };
 
 /* =========================================================
-   MAP CONTROLLER (Leaflet + Esri satellite + OSRM routing)
+   MAP CONTROLLER (Leaflet + street map + OSRM routing)
    ========================================================= */
 function MapController(elId) {
   const map = L.map(elId, { zoomControl: false, attributionControl: false });
   map.setView([6.9271, 79.8612], 15); // sensible default; recentres on first fix
 
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    maxZoom: 19,
+  // A normal street map (roads, buildings, labels) is far more useful than
+  // satellite imagery for short-distance navigation — you can actually see
+  // which street/building to walk toward instead of guessing from rooftops.
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    subdomains: 'abcd',
+    maxZoom: 20,
   }).addTo(map);
 
   L.control.attribution({ position: 'bottomleft', prefix: false }).addTo(map);
@@ -417,6 +432,7 @@ function MapController(elId) {
   }
 
   function setMe(lat, lng, accuracy) {
+    const isFirstMe = !meMarker;
     if (!meMarker) {
       meMarker = L.marker([lat, lng], { icon: pulseIcon('me') }).addTo(map);
     } else {
@@ -426,12 +442,17 @@ function MapController(elId) {
       if (!meAccuracy) meAccuracy = L.circle([lat, lng], { radius: accuracy, color: '#5b5fef', weight: 1, fillOpacity: 0.08 }).addTo(map);
       else { meAccuracy.setLatLng([lat, lng]); meAccuracy.setRadius(accuracy); }
     }
-    if (autoFollow && !targetMarker) map.panTo([lat, lng]);
+    if (autoFollow) {
+      if (isFirstMe && targetMarker && !hasFitOnce) { hasFitOnce = true; fitBoth(true); }
+      else if (!targetMarker) map.panTo([lat, lng]);
+    }
     recalcRoute();
   }
 
+  let hasFitOnce = false;
   function setTarget(lat, lng, near = false) {
     const cls = near ? 'target near' : 'target';
+    const isFirstTarget = !targetMarker;
     if (!targetMarker) {
       targetMarker = L.marker([lat, lng], { icon: pulseIcon(cls) }).addTo(map);
     } else {
@@ -439,12 +460,17 @@ function MapController(elId) {
       targetMarker.setIcon(pulseIcon(cls));
     }
     recalcRoute();
-    if (autoFollow) fitBoth();
+    if (autoFollow) {
+      if (isFirstTarget && meMarker && !hasFitOnce) { hasFitOnce = true; fitBoth(true); }
+      else fitBoth();
+    }
   }
 
-  function fitBoth() {
+  function fitBoth(animate = false) {
     if (meMarker && targetMarker) {
-      map.fitBounds(L.latLngBounds([meMarker.getLatLng(), targetMarker.getLatLng()]), { padding: [70, 70], maxZoom: 17 });
+      const bounds = L.latLngBounds([meMarker.getLatLng(), targetMarker.getLatLng()]);
+      if (animate) map.flyToBounds(bounds, { padding: [70, 70], maxZoom: 18, duration: 0.8 });
+      else map.fitBounds(bounds, { padding: [70, 70], maxZoom: 18 });
     }
   }
 
@@ -655,6 +681,53 @@ const TrackController = (function () {
   let mapCtl = null;
   let hasArrived = false;
   let myPos = null;
+  let lastTargetPos = null;
+  let deviceHeading = null; // compass heading in degrees, null if unavailable
+
+  function handleOrientation(e) {
+    let heading = null;
+    if (typeof e.webkitCompassHeading === 'number' && !isNaN(e.webkitCompassHeading)) {
+      heading = e.webkitCompassHeading; // iOS Safari: already clockwise-from-north
+    } else if (typeof e.alpha === 'number' && !isNaN(e.alpha)) {
+      heading = (360 - e.alpha) % 360; // Android/others: alpha is counter-clockwise
+    }
+    if (heading == null) return;
+    deviceHeading = heading;
+    updateCompass();
+  }
+
+  function startCompass() {
+    // iOS 13+ requires this to be called directly inside a user gesture —
+    // connect() is only ever invoked from a click handler, so this qualifies.
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      DeviceOrientationEvent.requestPermission()
+        .then((state) => { if (state === 'granted') window.addEventListener('deviceorientation', handleOrientation, true); })
+        .catch(() => {});
+    } else if ('ondeviceorientationabsolute' in window) {
+      window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+    } else if ('ondeviceorientation' in window) {
+      window.addEventListener('deviceorientation', handleOrientation, true);
+    }
+  }
+
+  function stopCompass() {
+    window.removeEventListener('deviceorientation', handleOrientation, true);
+    window.removeEventListener('deviceorientationabsolute', handleOrientation, true);
+    deviceHeading = null;
+  }
+
+  function updateCompass() {
+    const arrow = $('#compassArrowSvg');
+    const label = $('#compassLabel');
+    const widget = $('#trackCompass');
+    if (!arrow || !label) return;
+    if (!myPos || !lastTargetPos) { label.textContent = 'Waiting for GPS…'; return; }
+    const bearing = bearingDeg(myPos.latitude, myPos.longitude, lastTargetPos.lat, lastTargetPos.lng);
+    const rotation = deviceHeading != null ? bearing - deviceHeading : bearing;
+    arrow.style.transform = `rotate(${rotation}deg)`;
+    label.textContent = deviceHeading != null ? 'Walk this way' : 'Point phone up →';
+    widget?.classList.toggle('near', hasArrived);
+  }
 
   function showState(name) {
     $$('.track-state').forEach((s) => s.classList.remove('active'));
@@ -709,12 +782,15 @@ const TrackController = (function () {
       onData(data);
     });
 
+    startCompass();
+
     // Start my own geolocation too, so distance/route can be computed both ways
     Geo.start(
       (pos) => {
         myPos = pos.coords;
         if (mapCtl) mapCtl.setMe(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
         checkProximity();
+        updateCompass();
       },
       (err) => {
         if (err === 'denied') Toast.show('error', 'Location permission needed', 'Allow location access to see your position and distance on the map.');
@@ -726,6 +802,7 @@ const TrackController = (function () {
     unsub && unsub();
     unsub = null;
     Geo.stop();
+    stopCompass();
   }
 
   function onConnected() {
@@ -735,12 +812,12 @@ const TrackController = (function () {
     Audio_.success();
   }
 
-  let lastTargetPos = null;
   function onData(data) {
     lastTargetPos = data;
     if (mapCtl) mapCtl.setTarget(data.lat, data.lng, hasArrived);
     $('#trackUpdated').textContent = timeAgo(data.updatedAt);
     checkProximity();
+    updateCompass();
   }
 
   function checkProximity() {
@@ -760,6 +837,7 @@ const TrackController = (function () {
       });
     } else if (d > 10 && hasArrived) {
       hasArrived = false; // reset so it can trigger again later
+      $('#trackCompass')?.classList.remove('near');
     }
   }
 
@@ -774,6 +852,9 @@ const TrackController = (function () {
     teardownAttempt();
     hasArrived = false;
     myPos = null; lastTargetPos = null;
+    const label = $('#compassLabel');
+    if (label) label.textContent = 'Waiting for GPS…';
+    $('#trackCompass')?.classList.remove('near');
     showState('entry');
   }
 

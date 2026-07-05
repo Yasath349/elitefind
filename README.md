@@ -12,8 +12,8 @@ One person opens **Share** and gets a unique Session ID (and QR code). Another p
 
 - Glassmorphic, aurora-lit UI with animated hero, floating cards, and a signature radar/beacon element
 - Session-based sharing — no accounts, no sign-up, no persistent history
-- Live satellite map (Esri World Imagery) via Leaflet.js
-- Turn-by-turn walking routes via Leaflet Routing Machine + OSRM
+- Live street map (roads, buildings, labels — not satellite) via Leaflet.js, built for close-range/indoor navigation
+- Turn-by-turn walking routes via Leaflet Routing Machine + OSRM, plus a device-compass arrow that points straight at the other person (works even off-road, e.g. across a building or field)
 - Real-time sync that **works across real devices out of the box** via a free public relay (ntfy.sh), with optional **Firebase Realtime Database** for a private backend — see below
 - QR code generation for instant session sharing
 - 5-meter proximity detection with a synthesized Web Audio chime (no external sound files needed)
@@ -112,6 +112,7 @@ Once configured, `SyncLayer` in `app.js` automatically switches from local demo 
 - The included Firebase rules (if you opt into Firebase) are permissive (open read/write) to keep setup friction low. Add Firebase Auth before shipping this publicly.
 - Geolocation accuracy depends entirely on the user's device and environment (GPS vs. Wi-Fi/IP-based positioning).
 - The proximity beep uses the Web Audio API, which mobile browsers only allow after a user gesture — the app unlocks it on first tap, but if a device is in silent/mute mode the OS may still suppress the sound.
+- The direction arrow needs device-compass access. iOS Safari will show a one-time permission prompt the first time you connect (tap "Allow"); if you decline, the arrow still shows the direction relative to north instead of relative to which way you're facing.
 
 ---
 

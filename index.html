@@ -332,6 +332,12 @@
               <button class="icon-btn map-fullscreen-btn" title="Fullscreen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg></button>
             </div>
           </div>
+          <div class="compass-widget glass" id="trackCompass" title="Direction to them">
+            <svg viewBox="0 0 24 24" id="compassArrowSvg" style="width:34px;height:34px;transition:transform .25s ease-out;">
+              <path d="M12 2 L18 20 L12 16 L6 20 Z" fill="var(--mint)" stroke="var(--mint)" stroke-width="0.5" stroke-linejoin="round"/>
+            </svg>
+            <span id="compassLabel">Waiting for GPS…</span>
+          </div>
           <div class="distance-card glass">
             <div class="distance-item"><b id="trackDistance">—</b><span>Distance</span></div>
             <div class="distance-item"><b id="trackEta">—</b><span>Walking ETA</span></div>
