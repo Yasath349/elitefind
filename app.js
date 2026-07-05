@@ -434,6 +434,15 @@ function MapController(elId) {
   L.control.attribution({ position: 'bottomleft', prefix: false }).addTo(map);
   L.control.zoom({ position: 'bottomright' }).addTo(map);
 
+  // Heading-up rotation (below) rotates the map's root element with CSS.
+  // Leaflet's zoom/attribution buttons live inside that same root element by
+  // default, so they'd spin along with it. Moving them out to sit alongside
+  // it in the (unrotated) map frame keeps them upright and in a fixed spot.
+  const rootEl = map.getContainer();
+  const controlLayer = rootEl.querySelector('.leaflet-control-container');
+  if (controlLayer && rootEl.parentElement) rootEl.parentElement.appendChild(controlLayer);
+  rootEl.style.transition = 'transform 0.2s linear';
+
   let meMarker = null, targetMarker = null, meAccuracy = null, routingControl = null;
   let autoFollow = true;
 
@@ -508,7 +517,7 @@ function MapController(elId) {
             fitSelectedRoutes: false,
             show: false,
             createMarker: () => null,
-            lineOptions: { styles: [{ color: '#22d3ee', opacity: 0.85, weight: 5 }] },
+            lineOptions: { styles: [{ color: '#22d3ee', opacity: 0.9, weight: 6, className: 'route-path' }] },
           }).addTo(map);
         } else {
           routingControl.setWaypoints([meMarker.getLatLng(), targetMarker.getLatLng()]);
@@ -544,7 +553,31 @@ function MapController(elId) {
     fitBoth();
   }
 
-  return { map, setMe, setTarget, toggleFollow, destroy, fullscreen, fitBoth, flyToTarget, flyToMe, refreshSize };
+  // "Heading-up" rotation: spin the map's visual content to match the
+  // device's compass, so whichever way you're facing is always "up" on
+  // screen — like a turn-by-turn nav app. Only the map root is CSS-rotated
+  // (markers are circular so this doesn't distort them, and the zoom/
+  // attribution controls were detached above so they stay upright).
+  // Scaled up slightly so a rotated square still covers every corner of
+  // the frame instead of showing gaps.
+  function setRotation(deg) {
+    rootEl.style.transformOrigin = '50% 50%';
+    rootEl.style.transform = (deg === null || deg === undefined) ? '' : `rotate(${-deg}deg) scale(1.45)`;
+  }
+
+  // While the map is heading-rotated, raw touch/mouse drag math no longer
+  // lines up with the visual (rotated) map — a known limitation of CSS-only
+  // map rotation — so manual drag/zoom gestures are switched off and only
+  // the explicit locate/zoom buttons (which move the map programmatically)
+  // remain active. Restored automatically if the compass becomes unavailable.
+  function setInteractive(enabled) {
+    const fns = enabled
+      ? ['enable', 'enable', 'enable', 'enable']
+      : ['disable', 'disable', 'disable', 'disable'];
+    [map.dragging, map.doubleClickZoom, map.scrollWheelZoom, map.touchZoom].forEach((h, i) => h && h[fns[i]]());
+  }
+
+  return { map, setMe, setTarget, toggleFollow, destroy, fullscreen, fitBoth, flyToTarget, flyToMe, refreshSize, setRotation, setInteractive };
 }
 
 /* =========================================================
@@ -753,7 +786,13 @@ const TrackController = (function () {
       heading = (360 - e.alpha) % 360; // Android/others: alpha is counter-clockwise
     }
     if (heading == null) return;
+    const firstHeading = deviceHeading == null;
     deviceHeading = heading;
+    if (mapCtl) {
+      // First real heading reading — switch the map into heading-up mode.
+      if (firstHeading) mapCtl.setInteractive(false);
+      mapCtl.setRotation(heading);
+    }
     updateCompass();
   }
 
@@ -775,6 +814,10 @@ const TrackController = (function () {
     window.removeEventListener('deviceorientation', handleOrientation, true);
     window.removeEventListener('deviceorientationabsolute', handleOrientation, true);
     deviceHeading = null;
+    if (mapCtl) {
+      mapCtl.setRotation(null);
+      mapCtl.setInteractive(true);
+    }
   }
 
   function updateCompass() {

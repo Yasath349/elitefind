@@ -434,6 +434,16 @@ a{ color: inherit; text-decoration: none; }
 
 .leaflet-container{ font-family: var(--font-body) !important; background: var(--surface-2) !important; }
 
+/* Routing line — an animated dashed "road trip" path from you to them,
+   instead of a static line, so the direction of travel reads clearly. */
+.route-path{
+  stroke-dasharray: 14 12;
+  animation: routeDash 1s linear infinite;
+  filter: drop-shadow(0 0 6px rgba(34,211,238,.65));
+}
+@keyframes routeDash{ to{ stroke-dashoffset: -26; } }
+@media (prefers-reduced-motion: reduce){ .route-path{ animation: none; } }
+
 .marker-pulse{ position:relative; width:26px; height:26px; }
 .marker-pulse .dot{ position:absolute; inset:6px; border-radius:50%; background: var(--indigo); box-shadow: 0 0 0 3px rgba(91,95,239,.3); }
 .marker-pulse .ring{ position:absolute; inset:0; border-radius:50%; border:2px solid var(--indigo); animation: markerPulse 2s infinite; }
