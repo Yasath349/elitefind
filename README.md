@@ -16,7 +16,8 @@ One person opens **Share** and gets a unique Session ID (and QR code). Another p
 - Turn-by-turn walking routes via Leaflet Routing Machine + OSRM, plus a device-compass arrow that points straight at the other person (works even off-road, e.g. across a building or field)
 - Real-time sync that **works across real devices out of the box** via a free public relay (ntfy.sh), with optional **Firebase Realtime Database** for a private backend — see below
 - QR code generation for instant session sharing
-- 5-meter proximity detection with a synthesized Web Audio chime (no external sound files needed)
+- 5-meter proximity detection with a synthesized Web Audio chime that **repeats on both phones** — sharer's and tracker's — until either side disconnects or they move apart
+- Track screen goes **full-screen** the moment it connects, so the direction arrow, distance, and route are as easy to read as possible (exits automatically on Disconnect or on leaving the Track view)
 - GPS accuracy, coordinates, speed, and "last updated" live readouts
 - Custom animated states for connecting / searching / connected / error — zero native `alert()` boxes
 - Dark / light theme toggle with animated transitions
@@ -100,7 +101,8 @@ Once configured, `SyncLayer` in `app.js` automatically switches from local demo 
 - **`SyncLayer`** — a transport-agnostic interface (`push`, `subscribe`, `endSession`) backed by Firebase if configured, otherwise the public ntfy.sh relay (plus an always-on local `BroadcastChannel` mirror for same-browser testing).
 - **`MapController`** — one Leaflet map instance per screen (Share/Track), with pulsing custom markers, an accuracy circle, and debounced OSRM route recalculation.
 - **`ShareController` / `TrackController`** — screen-level state machines that wire geolocation + SyncLayer + MapController together, and drive the UI (status chips, OTP entry, connection states).
-- **`Audio_`** — synthesizes all UI sounds (click, success, error, notification, arrival chime) with the Web Audio API, so no binary sound assets are required.
+- **`Audio_`** — synthesizes all UI sounds (click, success, error, notification, arrival chime) with the Web Audio API, so no binary sound assets are required. `startAlarm()` / `stopAlarm()` loop the arrival chime every 1.8s for the proximity alert, so it keeps beeping instead of playing once.
+- **Two-way proximity** — the tracker publishes its own live position on a second sync channel (`<sessionId>_trk`), separate from the sharer's channel. This lets the sharer's device work out the distance and beep on its own, independently of the tracker's phone, purely by subscribing to that channel — no changes to `SyncLayer` itself were needed.
 - **`Toast` / `Modal`** — shared UI primitives used for every success/error/info state instead of native browser dialogs.
 
 ---

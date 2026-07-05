@@ -444,6 +444,33 @@ a{ color: inherit; text-decoration: none; }
 @keyframes markerPulse{ 0%{ transform: scale(.6); opacity:1;} 100%{ transform: scale(2.4); opacity:0;} }
 
 /* =========================================================
+   IMMERSIVE FULL-SCREEN TRACK MAP
+   Once a Track session connects, the map takes over the whole
+   viewport so the direction arrow / distance / route are as
+   clear as possible. Toggled via body.map-immersive in app.js,
+   and only ever applied while the Track view is the active one
+   (Router removes it on any other navigation), so the navbar
+   can never get stuck hidden.
+   ========================================================= */
+body.map-immersive{ overflow:hidden; }
+body.map-immersive .navbar{ display:none; }
+body.map-immersive #view-track{ padding-top:0; min-height:100vh; }
+body.map-immersive #view-track .container{ padding:0; max-width:none; }
+body.map-immersive #view-track .tool-header{ display:none; }
+body.map-immersive #trackState-connected{ padding:0; gap:0; }
+body.map-immersive #trackState-connected .map-shell{
+  position: fixed; inset:0; z-index:400; max-width:none; margin:0; width:100vw; height:100vh;
+}
+body.map-immersive #trackState-connected .map-frame{
+  width:100%; height:100%; border-radius:0; border:none; box-shadow:none;
+}
+body.map-immersive #trackMap{ width:100%; height:100% !important; }
+body.map-immersive #trackState-connected .disconnect-wrap{
+  position: fixed; left:50%; bottom:200px; transform: translateX(-50%);
+  z-index:700; margin:0;
+}
+
+/* =========================================================
    TOASTS / MODALS / SKELETONS
    ========================================================= */
 .toast-stack{ position: fixed; top: 96px; right: 20px; z-index: 1000; display:flex; flex-direction:column; gap:10px; max-width: 340px; }
@@ -527,6 +554,7 @@ a{ color: inherit; text-decoration: none; }
   .otp-input input{ width:15vw; max-width:38px; height:48px; font-size:1.1rem; }
   .entry-card{ padding:24px 18px; }
   .toast-stack{ left:12px; right:12px; top:auto; bottom:90px; max-width:none; }
+  body.map-immersive #trackState-connected .disconnect-wrap{ bottom:168px; }
 }
 
 @media (max-width: 380px){

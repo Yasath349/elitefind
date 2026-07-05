@@ -163,6 +163,10 @@ const Router = {
   go(name, push = true) {
     const view = $(`#view-${name}`);
     if (!view) return;
+    // Safety net: the full-screen tracking map only ever makes sense on the
+    // Track view — drop it on any other navigation so the navbar can never
+    // end up permanently hidden.
+    if (name !== 'track') document.body.classList.remove('map-immersive');
     $$('.view').forEach((v) => v.classList.remove('active'));
     view.classList.add('active');
     $$('.nav-link[data-view]').forEach((l) => l.classList.toggle('active', l.dataset.view === name));
@@ -203,6 +207,21 @@ const Audio_ = {
   notify() { this.tone(880, 0.1, 'triangle', 0.05); },
   arrival() {
     [880, 1046.5, 1318.5].forEach((f, i) => this.tone(f, 0.22, 'sine', 0.07, i * 0.12));
+  },
+  // Repeating proximity beep — used on both the Share and Track screens once
+  // the two devices are within 5m of each other. Keeps beeping until
+  // stopAlarm() is called (on disconnect, stop-sharing, or moving apart).
+  _alarmTimer: null,
+  startAlarm() {
+    if (this._alarmTimer) return; // already beeping — don't stack intervals
+    this.arrival();
+    this._alarmTimer = setInterval(() => this.arrival(), 1800);
+  },
+  stopAlarm() {
+    if (this._alarmTimer) {
+      clearInterval(this._alarmTimer);
+      this._alarmTimer = null;
+    }
   },
 };
 
@@ -517,7 +536,15 @@ function MapController(elId) {
     map.flyTo(meMarker.getLatLng(), Math.max(map.getZoom(), 17), { duration: 0.6 });
   }
 
-  return { map, setMe, setTarget, toggleFollow, destroy, fullscreen, fitBoth, flyToTarget, flyToMe };
+  // Leaflet caches container size — call this after the map's container
+  // changes size outside of Leaflet's own control (e.g. switching into the
+  // full-screen tracking layout), or tiles render into the old, smaller box.
+  function refreshSize() {
+    map.invalidateSize();
+    fitBoth();
+  }
+
+  return { map, setMe, setTarget, toggleFollow, destroy, fullscreen, fitBoth, flyToTarget, flyToMe, refreshSize };
 }
 
 /* =========================================================
@@ -527,13 +554,31 @@ const ShareController = (function () {
   let sessionId = null;
   let sharing = false;
   let unsub = null;
+  let unsubTracker = null;
   let mapCtl = null;
   let lastPos = null;
   let lastAccSpeed = { accuracy: null, speed: 0 };
+  let trackerPos = null; // the tracker's own live position, if/once they connect
+  let hasArrivedShare = false;
   let expiryTimer = null;
   let heartbeatTimer = null;
   const EXPIRY_MIN = 60;
   let expiresAt = null;
+
+  // Mirrors TrackController's own proximity check, run independently on this
+  // device so this phone beeps too — not just the tracker's phone.
+  function checkProximityShare() {
+    if (!lastPos || !trackerPos) return;
+    const d = haversineMeters(lastPos.lat, lastPos.lng, trackerPos.lat, trackerPos.lng);
+    if (d <= 5 && !hasArrivedShare) {
+      hasArrivedShare = true;
+      Audio_.startAlarm();
+      Toast.show('success', "They're nearby!", 'The person tracking you is within 5 meters.');
+    } else if (d > 10 && hasArrivedShare) {
+      hasArrivedShare = false;
+      Audio_.stopAlarm();
+    }
+  }
 
   function ensureSession() {
     if (!sessionId) sessionId = makeSessionId();
@@ -604,6 +649,7 @@ const ShareController = (function () {
         setStatus('#chipGps', accuracy < 20 ? 'Excellent' : accuracy < 50 ? 'Good' : 'Weak', accuracy < 20 ? 'good' : accuracy < 50 ? 'warn' : 'bad');
         lastAccSpeed = { accuracy, speed: speed || 0 };
         SyncLayer.push(sessionId, { lat, lng, accuracy, speed: speed || 0, role: 'sharer' });
+        checkProximityShare();
       },
       (err) => {
         if (err === 'denied') {
@@ -627,6 +673,16 @@ const ShareController = (function () {
       SyncLayer.push(sessionId, { lat: lastPos.lat, lng: lastPos.lng, ...lastAccSpeed, role: 'sharer' });
     }, 5000);
 
+    // Listen for the tracker's own live position (pushed on a dedicated
+    // channel by TrackController) so this device can work out the distance
+    // and beep on its own, independent of the tracker's phone.
+    if (unsubTracker) unsubTracker();
+    unsubTracker = SyncLayer.subscribe(`${sessionId}_trk`, (data) => {
+      if (!data) return;
+      trackerPos = data;
+      checkProximityShare();
+    });
+
     Toast.show('success', 'Broadcasting started', `Session ${sessionId} is live.`);
     Audio_.success();
   }
@@ -636,6 +692,10 @@ const ShareController = (function () {
     Geo.stop();
     clearInterval(expiryTimer);
     clearInterval(heartbeatTimer);
+    if (unsubTracker) { unsubTracker(); unsubTracker = null; }
+    trackerPos = null;
+    hasArrivedShare = false;
+    Audio_.stopAlarm();
     $('#startShareBtn').removeAttribute('disabled');
     $('#stopShareBtn').setAttribute('disabled', 'true');
     $('#shareLiveDot').classList.remove('good');
@@ -683,6 +743,7 @@ const TrackController = (function () {
   let myPos = null;
   let lastTargetPos = null;
   let deviceHeading = null; // compass heading in degrees, null if unavailable
+  let trackerHeartbeat = null; // keeps the sharer's proximity check fed with our position
 
   function handleOrientation(e) {
     let heading = null;
@@ -789,6 +850,14 @@ const TrackController = (function () {
       (pos) => {
         myPos = pos.coords;
         if (mapCtl) mapCtl.setMe(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+        // Publish my own position on a dedicated channel so the sharer's
+        // device can independently work out the distance and beep too.
+        SyncLayer.push(`${sessionId}_trk`, {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+          role: 'tracker',
+        });
         checkProximity();
         updateCompass();
       },
@@ -796,6 +865,20 @@ const TrackController = (function () {
         if (err === 'denied') Toast.show('error', 'Location permission needed', 'Allow location access to see your position and distance on the map.');
       }
     );
+
+    // Re-publish my last known fix every few seconds even without a fresh GPS
+    // tick, mirroring the sharer's own heartbeat — keeps the sharer's device
+    // from seeing my position go stale if I'm standing still.
+    clearInterval(trackerHeartbeat);
+    trackerHeartbeat = setInterval(() => {
+      if (!myPos) return;
+      SyncLayer.push(`${sessionId}_trk`, {
+        lat: myPos.latitude,
+        lng: myPos.longitude,
+        accuracy: myPos.accuracy,
+        role: 'tracker',
+      });
+    }, 5000);
   }
 
   function teardownAttempt() {
@@ -803,11 +886,22 @@ const TrackController = (function () {
     unsub = null;
     Geo.stop();
     stopCompass();
+    clearInterval(trackerHeartbeat);
+    trackerHeartbeat = null;
+    Audio_.stopAlarm();
+    // The full-screen map only makes sense while actively connected —
+    // drop it whenever a connection attempt is torn down (retry, error,
+    // or manual disconnect all funnel through here).
+    document.body.classList.remove('map-immersive');
   }
 
   function onConnected() {
     showState('connected');
     if (!mapCtl) mapCtl = MapController('trackMap');
+    document.body.classList.add('map-immersive');
+    // Let the layout settle into full-screen before telling Leaflet to
+    // re-measure its container, or the map renders at the old, smaller size.
+    requestAnimationFrame(() => setTimeout(() => mapCtl.refreshSize(), 60));
     Toast.show('success', 'Connected', `Live-tracking session ${sessionId}.`);
     Audio_.success();
   }
@@ -827,7 +921,8 @@ const TrackController = (function () {
     $('#trackEta').textContent = fmtETA(d);
     if (d <= 5 && !hasArrived) {
       hasArrived = true;
-      Audio_.arrival();
+      // Keeps beeping (not just once) until they disconnect or move apart.
+      Audio_.startAlarm();
       if (mapCtl) mapCtl.setTarget(lastTargetPos.lat, lastTargetPos.lng, true);
       Modal.show({
         icon: 'success',
@@ -837,7 +932,9 @@ const TrackController = (function () {
       });
     } else if (d > 10 && hasArrived) {
       hasArrived = false; // reset so it can trigger again later
+      Audio_.stopAlarm();
       $('#trackCompass')?.classList.remove('near');
+      if (mapCtl) mapCtl.setTarget(lastTargetPos.lat, lastTargetPos.lng, false);
     }
   }
 
